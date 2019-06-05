@@ -111,12 +111,18 @@ class DataBunch():
     @classmethod
     def create(cls, train_ds:Dataset, valid_ds:Dataset, test_ds:Optional[Dataset]=None, path:PathOrStr='.', bs:int=64,
                val_bs:int=None, num_workers:int=defaults.cpus, dl_tfms:Optional[Collection[Callable]]=None,
-               device:torch.device=None, collate_fn:Callable=data_collate, no_check:bool=False, **dl_kwargs)->'DataBunch':
+               device:torch.device=None, collate_fn:Callable=data_collate, no_check:bool=False, train_sampler=None, **dl_kwargs)->'DataBunch':
         "Create a `DataBunch` from `train_ds`, `valid_ds` and maybe `test_ds` with a batch size of `bs`. Passes `**dl_kwargs` to `DataLoader()`"
         datasets = cls._init_ds(train_ds, valid_ds, test_ds)
         val_bs = ifnone(val_bs, bs)
-        dls = [DataLoader(d, b, shuffle=s, drop_last=s, num_workers=num_workers, **dl_kwargs) for d,b,s in
-               zip(datasets, (bs,val_bs,val_bs,val_bs), (True,False,False,False)) if d is not None]
+        dls = []
+
+        for d,b,s in zip(datasets, (bs,val_bs,val_bs,val_bs), (True,False,False,False)):
+            if d is not None:
+                dls.append(DataLoader(
+                    d, b, shuffle=(s and (train_sampler is None or d != train_ds)),
+                    drop_last=s, num_workers=num_workers,
+                    sampler=(train_sampler if d == train_ds else None), **dl_kwargs))
         return cls(*dls, path=path, device=device, dl_tfms=dl_tfms, collate_fn=collate_fn, no_check=no_check)
 
     def __getattr__(self,k:int)->Any: return getattr(self.train_dl, k)
@@ -192,7 +198,7 @@ class DataBunch():
             ys = [self.train_ds.y.reconstruct(grab_idx(y, i), x=x) for i,x in enumerate(xs)]
         else : ys = [self.train_ds.y.reconstruct(grab_idx(y, i)) for i in range(n_items)]
         self.train_ds.x.show_xys(xs, ys, **kwargs)
- 
+
     def export(self, file:PathLikeOrBinaryStream='export.pkl'):
         "Export the minimal state of `self` for inference in `self.path/file`. `file` can be file-like (file or buffer)"
         xtra = dict(normalize=self.norm.keywords) if getattr(self, 'norm', False) else {}
@@ -225,10 +231,10 @@ class DataBunch():
 
     @property
     def is_empty(self)->bool:
-        return not ((self.train_dl and len(self.train_ds.items) != 0) or 
-                    (self.valid_dl and len(self.valid_ds.items) != 0) or 
+        return not ((self.train_dl and len(self.train_ds.items) != 0) or
+                    (self.valid_dl and len(self.valid_ds.items) != 0) or
                     (self.test_dl  and len(self.test_ds.items)  != 0))
-    
+
     @property
     def batch_size(self):   return self.train_dl.batch_size
     @batch_size.setter
